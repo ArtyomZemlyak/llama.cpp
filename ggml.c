@@ -19366,13 +19366,15 @@ size_t ggml_quantize_q4_0(const float * src, void * dst, int n, int k, int64_t *
 
         quantize_row_q4_0_reference(src + b, y, k);
 
-        for (int i = 0; i < nb; i++) {
-            for (int j = 0; j < QK4_0; j += 2) {
-                const uint8_t vi0 = y[i].qs[j/2] & 0x0F;
-                const uint8_t vi1 = y[i].qs[j/2] >> 4;
+        if (hist) {
+            for (int i = 0; i < nb; i++) {
+                for (int j = 0; j < QK4_0; j += 2) {
+                    const uint8_t vi0 = y[i].qs[j/2] & 0x0F;
+                    const uint8_t vi1 = y[i].qs[j/2] >> 4;
 
-                hist[vi0]++;
-                hist[vi1]++;
+                    hist[vi0]++;
+                    hist[vi1]++;
+                }
             }
         }
     }
@@ -19389,13 +19391,15 @@ size_t ggml_quantize_q4_1(const float * src, void * dst, int n, int k, int64_t *
 
         quantize_row_q4_1_reference(src + b, y, k);
 
-        for (int i = 0; i < nb; i++) {
-            for (int j = 0; j < QK4_1; j += 2) {
-                const uint8_t vi0 = y[i].qs[j/2] & 0x0F;
-                const uint8_t vi1 = y[i].qs[j/2] >> 4;
+        if (hist) {
+            for (int i = 0; i < nb; i++) {
+                for (int j = 0; j < QK4_1; j += 2) {
+                    const uint8_t vi0 = y[i].qs[j/2] & 0x0F;
+                    const uint8_t vi1 = y[i].qs[j/2] >> 4;
 
-                hist[vi0]++;
-                hist[vi1]++;
+                    hist[vi0]++;
+                    hist[vi1]++;
+                }
             }
         }
     }
@@ -19412,20 +19416,22 @@ size_t ggml_quantize_q5_0(const float * src, void * dst, int n, int k, int64_t *
 
         quantize_row_q5_0_reference(src + b, y, k);
 
-        for (int i = 0; i < nb; i++) {
-            uint32_t qh;
-            memcpy(&qh, &y[i].qh, sizeof(qh));
+        if (hist) {
+            for (int i = 0; i < nb; i++) {
+                uint32_t qh;
+                memcpy(&qh, &y[i].qh, sizeof(qh));
 
-            for (int j = 0; j < QK5_0; j += 2) {
-                const uint8_t vh0 = ((qh & (1u << (j + 0 ))) >> (j + 0 )) << 4;
-                const uint8_t vh1 = ((qh & (1u << (j + 16))) >> (j + 12));
+                for (int j = 0; j < QK5_0; j += 2) {
+                    const uint8_t vh0 = ((qh & (1u << (j + 0 ))) >> (j + 0 )) << 4;
+                    const uint8_t vh1 = ((qh & (1u << (j + 16))) >> (j + 12));
 
-                // cast to 16 bins
-                const uint8_t vi0 = ((y[i].qs[j/2] & 0x0F) | vh0) / 2;
-                const uint8_t vi1 = ((y[i].qs[j/2] >>   4) | vh1) / 2;
+                    // cast to 16 bins
+                    const uint8_t vi0 = ((y[i].qs[j/2] & 0x0F) | vh0) / 2;
+                    const uint8_t vi1 = ((y[i].qs[j/2] >>   4) | vh1) / 2;
 
-                hist[vi0]++;
-                hist[vi1]++;
+                    hist[vi0]++;
+                    hist[vi1]++;
+                }
             }
         }
     }
@@ -19442,20 +19448,22 @@ size_t ggml_quantize_q5_1(const float * src, void * dst, int n, int k, int64_t *
 
         quantize_row_q5_1_reference(src + b, y, k);
 
-        for (int i = 0; i < nb; i++) {
-            uint32_t qh;
-            memcpy(&qh, &y[i].qh, sizeof(qh));
+        if (hist) {
+            for (int i = 0; i < nb; i++) {
+                uint32_t qh;
+                memcpy(&qh, &y[i].qh, sizeof(qh));
 
-            for (int j = 0; j < QK5_1; j += 2) {
-                const uint8_t vh0 = ((qh & (1u << (j + 0 ))) >> (j + 0 )) << 4;
-                const uint8_t vh1 = ((qh & (1u << (j + 16))) >> (j + 12));
+                for (int j = 0; j < QK5_1; j += 2) {
+                    const uint8_t vh0 = ((qh & (1u << (j + 0 ))) >> (j + 0 )) << 4;
+                    const uint8_t vh1 = ((qh & (1u << (j + 16))) >> (j + 12));
 
-                // cast to 16 bins
-                const uint8_t vi0 = ((y[i].qs[j/2] & 0x0F) | vh0) / 2;
-                const uint8_t vi1 = ((y[i].qs[j/2] >>   4) | vh1) / 2;
+                    // cast to 16 bins
+                    const uint8_t vi0 = ((y[i].qs[j/2] & 0x0F) | vh0) / 2;
+                    const uint8_t vi1 = ((y[i].qs[j/2] >>   4) | vh1) / 2;
 
-                hist[vi0]++;
-                hist[vi1]++;
+                    hist[vi0]++;
+                    hist[vi1]++;
+                }
             }
         }
     }
@@ -19472,11 +19480,13 @@ size_t ggml_quantize_q8_0(const float * src, void * dst, int n, int k, int64_t *
 
         quantize_row_q8_0_reference(src + b, y, k);
 
-        for (int i = 0; i < nb; i++) {
-            for (int j = 0; j < QK8_0; ++j) {
-                const int8_t vi = y[i].qs[j];
+        if (hist) {
+            for (int i = 0; i < nb; i++) {
+                for (int j = 0; j < QK8_0; ++j) {
+                    const int8_t vi = y[i].qs[j];
 
-                hist[vi/16 + 8]++;
+                    hist[vi/16 + 8]++;
+                }
             }
         }
     }

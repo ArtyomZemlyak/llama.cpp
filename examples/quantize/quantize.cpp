@@ -154,9 +154,20 @@ int main(int argc, char ** argv) {
     if (argc > arg_idx) {
         try {
             params.nthread = std::stoi(argv[arg_idx]);
+            ++arg_idx;
         }
         catch (const std::exception & e) {
             fprintf(stderr, "%s: invalid nthread '%s' (%s)\n", __func__, argv[arg_idx], e.what());
+            return 1;
+        }
+    }
+    if (argc > arg_idx) {
+        try {
+            params.collect_histo = std::stoi(argv[arg_idx]);
+            ++arg_idx;
+        }
+        catch (const std::exception & e) {
+            fprintf(stderr, "%s: invalid collect_histo '%s' (%s)\n", __func__, argv[arg_idx], e.what());
             return 1;
         }
     }

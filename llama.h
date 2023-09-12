@@ -165,6 +165,7 @@ extern "C" {
         bool allow_requantize;       // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor; // quantize output.weight
         bool only_copy;              // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
+        bool collect_histo;          // collect quant histogram when quantizing?
     } llama_model_quantize_params;
 
     // grammar types

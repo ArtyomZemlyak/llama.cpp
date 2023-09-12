@@ -4726,6 +4726,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     int nthread = params->nthread;
+    bool collect_histo = params->collect_histo;
 
     if (nthread <= 0) {
         nthread = std::thread::hardware_concurrency();
@@ -4807,6 +4808,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     // placeholder for the meta data
     ::zeros(fout, meta_size);
+
+    std::vector<float> f32_conv_buf;
 
     for (int i = 0; i < ml->n_tensors; ++i) {
         struct ggml_tensor * tensor = ml->get_tensor_meta(i);
@@ -4947,7 +4950,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             const size_t nelements = ggml_nelements(tensor);
 
             float * f32_data;
-            std::vector<float> f32_conv_buf;
 
             if (tensor->type == GGML_TYPE_F32) {
                 f32_data = (float *) tensor->data;
@@ -4963,7 +4965,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             work.resize(nelements * 4); // upper bound on size
             new_data = work.data();
-            std::vector<int64_t> hist_cur(1 << 4, 0);
+            std::vector<int64_t> hist_cur;
+            if (collect_histo) {
+                hist_cur.resize(1 << 4, 0);
+            }
 
             static const int chunk_size = 32 * 512;
             const int nchunk = (nelements + chunk_size - 1)/chunk_size;
@@ -4990,7 +4995,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                         }
                         lock.unlock();
                         size_t last = std::min(nelements, first + chunk_size);
-                        if (local_hist.empty()) {
+                        if (local_hist.empty() && !hist_cur.empty()) {
                             local_hist.resize(hist_cur.size(), 0);
                         }
                         local_size += ggml_quantize_chunk(new_type, f32_data, new_data, first, last - first, local_hist.data());
@@ -5379,6 +5384,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.allow_requantize            =*/ false,
         /*.quantize_output_tensor      =*/ true,
         /*.only_copy                   =*/ false,
+        /*.collect_histo               =*/ false,
     };
 
     return result;
