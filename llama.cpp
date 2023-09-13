@@ -3,6 +3,7 @@
 #include "ggml.h"
 
 #include "ggml-alloc.h"
+#include <chrono>
 
 #ifdef GGML_USE_CUBLAS
 #  include "ggml-cuda.h"
@@ -4811,14 +4812,19 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     std::vector<float> f32_conv_buf;
 
+    float time_convert = 0, time_quantize = 0, time_write = 0, time_read = 0;
+
     for (int i = 0; i < ml->n_tensors; ++i) {
         struct ggml_tensor * tensor = ml->get_tensor_meta(i);
 
         const std::string name = ggml_get_name(tensor);
 
+        auto tim1 = std::chrono::high_resolution_clock::now();
         read_data.resize(ggml_nbytes(tensor));
         tensor->data = read_data.data();
         ml->load_data_for(tensor);
+        auto tim2 = std::chrono::high_resolution_clock::now();
+        time_read += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
                ++idx, ml->n_tensors,
@@ -4951,6 +4957,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             float * f32_data;
 
+            auto tim1 = std::chrono::high_resolution_clock::now();
             if (tensor->type == GGML_TYPE_F32) {
                 f32_data = (float *) tensor->data;
             } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
@@ -4959,6 +4966,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 llama_convert_tensor_internal(tensor, f32_conv_buf, nelements, nthread);
                 f32_data = (float *) f32_conv_buf.data();
             }
+            auto tim2 = std::chrono::high_resolution_clock::now();
+            time_convert += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
 
             LLAMA_LOG_INFO("quantizing to %s .. ", ggml_type_name(new_type));
             fflush(stdout);
@@ -4970,6 +4979,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 hist_cur.resize(1 << 4, 0);
             }
 
+            tim1 = std::chrono::high_resolution_clock::now();
             static const int chunk_size = 32 * 512;
             const int nchunk = (nelements + chunk_size - 1)/chunk_size;
             const int nthread_use = nthread > 1 ? std::max(1, std::min(nthread, nchunk)) : 1;
@@ -5012,6 +5022,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     workers[it].join();
                 }
             }
+            tim2 = std::chrono::high_resolution_clock::now();
+            time_quantize += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
 
             LLAMA_LOG_INFO("size = %8.2f MB -> %8.2f MB | hist: ", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
             int64_t tot_count = 0;
@@ -5035,8 +5047,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         gguf_set_tensor_data(ctx_out, name.c_str(), new_data, new_size);
 
         // write tensor data + padding
+        tim1 = std::chrono::high_resolution_clock::now();
         fout.write((const char *) new_data, new_size);
         zeros(fout, GGML_PAD(new_size, align) - new_size);
+        tim2 = std::chrono::high_resolution_clock::now();
+        time_write += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
     }
 
     // go back to beginning of file and write the updated meta data
@@ -5051,8 +5066,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     gguf_free(ctx_out);
 
-    LLAMA_LOG_INFO("%s: model size  = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
-    LLAMA_LOG_INFO("%s: quant size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: model size    = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: quant size    = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: convert  time = %8.2f ms\n", __func__, time_convert);
+    LLAMA_LOG_INFO("%s: quantize time = %8.2f ms\n", __func__, time_quantize);
+    LLAMA_LOG_INFO("%s: write    time = %8.2f ms\n", __func__, time_write);
+    LLAMA_LOG_INFO("%s: read     time = %8.2f ms\n", __func__, time_read);
 
     // print histogram for all tensors
     {
