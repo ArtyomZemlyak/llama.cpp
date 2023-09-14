@@ -4991,6 +4991,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 auto compute = [&mutex, &counter, &hist_cur, &new_size, new_type, f32_data, new_data, nelements]() {
                     std::vector<int64_t> local_hist;
                     size_t local_size = 0;
+                    int64_t * hist = nullptr;
                     while (true) {
                         std::unique_lock<std::mutex> lock(mutex);
                         size_t first = counter; counter += chunk_size;
@@ -4999,16 +5000,17 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                                 for (int j=0; j<int(local_hist.size()); ++j) {
                                     hist_cur[j] += local_hist[j];
                                 }
-                                new_size += local_size;
                             }
+                            new_size += local_size;
                             break;
                         }
                         lock.unlock();
                         size_t last = std::min(nelements, first + chunk_size);
                         if (local_hist.empty() && !hist_cur.empty()) {
                             local_hist.resize(hist_cur.size(), 0);
+                            hist = local_hist.data();
                         }
-                        local_size += ggml_quantize_chunk(new_type, f32_data, new_data, first, last - first, local_hist.data());
+                        local_size += ggml_quantize_chunk(new_type, f32_data, new_data, first, last - first, hist);
                     }
                 };
                 if ((int) workers.size() < nthread_use - 1) {
