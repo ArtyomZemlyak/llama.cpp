@@ -4822,22 +4822,65 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         zeros(fout, GGML_PAD(new_size, align) - new_size);
     };
     std::thread writer_thread;
+    std::thread reader_thread;
 
     float time_convert = 0, time_quantize = 0, time_write = 0, time_read = 0;
 
-    for (int i = 0; i < ml->n_tensors; ++i) {
-        struct ggml_tensor * tensor = ml->get_tensor_meta(i);
+    if (ml->n_tensors < 1) {
+        fprintf(stderr, "%s: have no tensors!\n", __func__);
+        return;
+    }
 
+    struct ggml_tensor * next_tensor = ml->get_tensor_meta(0);
+    {
+        auto tim1 = std::chrono::high_resolution_clock::now();
+        auto& read_data = read_data_buffers[i_in_buffer];
+        auto size = ggml_nbytes(next_tensor);
+        size = 16384*((size + 16383)/16384);
+        read_data.resize(size);
+        next_tensor->data = read_data.data();
+        ml->load_data_for(next_tensor);
+        auto tim2 = std::chrono::high_resolution_clock::now();
+        time_read += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
+    }
+
+    for (int i = 0; i < ml->n_tensors; ++i) {
+
+        struct ggml_tensor * tensor = next_tensor;
         const std::string name = ggml_get_name(tensor);
 
         auto tim1 = std::chrono::high_resolution_clock::now();
-        auto& read_data = read_data_buffers[i_in_buffer];
-        i_in_buffer = (i_in_buffer + 1)%2;
-        read_data.resize(ggml_nbytes(tensor));
-        tensor->data = read_data.data();
-        ml->load_data_for(tensor);
+        if (i < ml->n_tensors - 1) {
+            if (reader_thread.joinable()) {
+                reader_thread.join();
+            }
+            i_in_buffer = (i_in_buffer + 1)%2;
+            next_tensor = ml->get_tensor_meta(i+1);
+            auto& read_data = read_data_buffers[i_in_buffer];
+            auto read_task = [&read_data, &ml, next_tensor] () {
+                auto size = ggml_nbytes(next_tensor);
+                size = 16384*((size + 16383)/16384);
+                read_data.resize(size);
+                next_tensor->data = read_data.data();
+                ml->load_data_for(next_tensor);
+            };
+            reader_thread = std::thread(read_task);
+        }
         auto tim2 = std::chrono::high_resolution_clock::now();
         time_read += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
+
+        //struct ggml_tensor * tensor = ml->get_tensor_meta(i);
+
+        //const std::string name = ggml_get_name(tensor);
+
+        //auto tim1 = std::chrono::high_resolution_clock::now();
+        //auto& read_data = read_data_buffers[i_in_buffer];
+        //i_in_buffer = (i_in_buffer + 1)%2;
+        //read_data.resize(ggml_nbytes(tensor));
+        //tensor->data = read_data.data();
+        //ml->load_data_for(tensor);
+        //auto tim2 = std::chrono::high_resolution_clock::now();
+        //time_read += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
                ++idx, ml->n_tensors,
@@ -5079,6 +5122,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     if (writer_thread.joinable()) {
         writer_thread.join();
+    }
+    if (reader_thread.joinable()) {
+        reader_thread.join();
     }
 
     // go back to beginning of file and write the updated meta data
