@@ -171,6 +171,16 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
+    if (argc > arg_idx) {
+        try {
+            params.use_mmap = std::stoi(argv[arg_idx]);
+            ++arg_idx;
+        }
+        catch (const std::exception & e) {
+            fprintf(stderr, "%s: invalid use_mmap '%s' (%s)\n", __func__, argv[arg_idx], e.what());
+            return 1;
+        }
+    }
 
     fprintf(stderr, "%s: build = %d (%s)\n", __func__, BUILD_NUMBER, BUILD_COMMIT);
 

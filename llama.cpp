@@ -4741,7 +4741,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         nthread = std::thread::hardware_concurrency();
     }
 
-    std::unique_ptr<llama_model_loader> ml(new llama_model_loader(fname_inp, /*use_mmap*/ false));
+    std::unique_ptr<llama_model_loader> ml(new llama_model_loader(fname_inp, /*use_mmap*/ params->use_mmap));
+    if (ml->use_mmap) {
+        ml->mapping.reset(new llama_mmap(&ml->file, /* prefetch */ 0, ggml_is_numa()));
+    }
 
     llama_model model;
     llm_load_arch(*ml, model);
@@ -5505,6 +5508,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.quantize_output_tensor      =*/ true,
         /*.only_copy                   =*/ false,
         /*.collect_histo               =*/ false,
+        /*.use_mmap                    =*/ false,
     };
 
     return result;

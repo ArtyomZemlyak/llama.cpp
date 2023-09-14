@@ -166,6 +166,7 @@ extern "C" {
         bool quantize_output_tensor; // quantize output.weight
         bool only_copy;              // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool collect_histo;          // collect quant histogram when quantizing?
+        bool use_mmap;               // use mmap to load the model to be quantized
     } llama_model_quantize_params;
 
     // grammar types
