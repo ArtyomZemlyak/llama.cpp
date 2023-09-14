@@ -4642,6 +4642,11 @@ void llama_beam_search(llama_context * ctx,
 //
 
 static void llama_convert_tensor_internal(struct ggml_tensor * tensor, std::vector<float> & output, const size_t nelements, const int nthread) {
+
+    if (tensor->type == GGML_TYPE_F16 && nthread > 1) {
+        // Let's rather do the conversion in the quantization threads
+        return;
+    }
     if (output.size() < nelements) {
         output.resize(nelements);
     }
@@ -4699,6 +4704,9 @@ static void llama_convert_tensor_internal(struct ggml_tensor * tensor, std::vect
 }
 
 static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
+
+    auto t_start = std::chrono::high_resolution_clock::now();
+
     ggml_type quantized_type;
     llama_ftype ftype = params->ftype;
 
@@ -4814,6 +4822,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     std::vector<std::vector<uint8_t>> read_data_buffers(2);
     std::vector<std::vector<float>> f32_conv_buffers(2);
     std::vector<std::vector<uint8_t>> work_buffers(2);
+    std::vector<std::vector<float>> worker_f32(nthread);
     int i_out_buffer = 0;
     int i_in_buffer = 0;
 
@@ -4850,10 +4859,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         const std::string name = ggml_get_name(tensor);
 
         auto tim1 = std::chrono::high_resolution_clock::now();
+        if (reader_thread.joinable()) {
+            reader_thread.join();
+        }
         if (i < ml->n_tensors - 1) {
-            if (reader_thread.joinable()) {
-                reader_thread.join();
-            }
             i_in_buffer = (i_in_buffer + 1)%2;
             next_tensor = ml->get_tensor_meta(i+1);
             auto& read_data = read_data_buffers[i_in_buffer];
@@ -5048,8 +5057,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             } else {
                 size_t counter = 0;
                 new_size = 0;
-                auto compute = [&mutex, &counter, &hist_cur, &new_size, new_type, f32_data, new_data, nelements]() {
+                auto compute = [&mutex, &counter, &hist_cur, &new_size, &worker_f32, new_type, f32_data, new_data, tensor, nelements](int it) {
                     std::vector<int64_t> local_hist;
+                    auto & local_f32 = worker_f32[it];
                     size_t local_size = 0;
                     int64_t * hist = nullptr;
                     while (true) {
@@ -5070,16 +5080,24 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                             local_hist.resize(hist_cur.size(), 0);
                             hist = local_hist.data();
                         }
-                        local_size += ggml_quantize_chunk(new_type, f32_data, new_data, first, last - first, hist);
+                        if (tensor->type == GGML_TYPE_F16) {
+                            if (local_f32.size() < last - first) {
+                                local_f32.resize(last - first);
+                            }
+                            ggml_fp16_to_fp32_row((ggml_fp16_t *)tensor->data + first, local_f32.data(), last - first);
+                            local_size += ggml_quantize_chunk(new_type, local_f32.data() - first, new_data, first, last - first, hist);
+                        } else {
+                            local_size += ggml_quantize_chunk(new_type, f32_data, new_data, first, last - first, hist);
+                        }
                     }
                 };
                 if ((int) workers.size() < nthread_use - 1) {
                     workers.resize(nthread_use - 1);
                 }
                 for (int it = 0; it < nthread_use - 1; ++it) {
-                    workers[it] = std::thread(compute);
+                    workers[it] = std::thread(compute, it);
                 }
-                compute();
+                compute(nthread_use - 1);
                 for (int it = 0; it < nthread_use - 1; ++it) {
                     workers[it].join();
                 }
@@ -5121,13 +5139,17 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     if (writer_thread.joinable()) {
+        auto tim1 = std::chrono::high_resolution_clock::now();
         writer_thread.join();
+        auto tim2 = std::chrono::high_resolution_clock::now();
+        time_write += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
     }
-    if (reader_thread.joinable()) {
-        reader_thread.join();
-    }
+    //if (reader_thread.joinable()) {
+    //    reader_thread.join();
+    //}
 
     // go back to beginning of file and write the updated meta data
+    auto tim1 = std::chrono::high_resolution_clock::now();
     {
         fout.seekp(0);
         std::vector<uint8_t> data(gguf_get_meta_size(ctx_out));
@@ -5136,6 +5158,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     fout.close();
+    auto tim2 = std::chrono::high_resolution_clock::now();
+    auto time_flush = 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
+    time_write += time_flush;
 
     gguf_free(ctx_out);
 
@@ -5144,6 +5169,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     LLAMA_LOG_INFO("%s: convert  time = %8.2f ms\n", __func__, time_convert);
     LLAMA_LOG_INFO("%s: quantize time = %8.2f ms\n", __func__, time_quantize);
     LLAMA_LOG_INFO("%s: write    time = %8.2f ms\n", __func__, time_write);
+    LLAMA_LOG_INFO("%s: flush    time = %8.2f ms\n", __func__, time_flush);
     LLAMA_LOG_INFO("%s: read     time = %8.2f ms\n", __func__, time_read);
 
     // print histogram for all tensors
@@ -5161,6 +5187,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             LLAMA_LOG_INFO("\n");
         }
     }
+    auto t_end = std::chrono::high_resolution_clock::now();
+    LLAMA_LOG_INFO("%s: finished in %g ms\n", __func__, 1e-3*std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count());
 }
 
 // TODO: after the GGUF PR, this likely won't work and needs to be updated
