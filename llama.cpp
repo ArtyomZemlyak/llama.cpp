@@ -4792,8 +4792,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     int idx = 0;
 
-    std::vector<uint8_t> read_data;
-    std::vector<uint8_t> work;
+    //std::vector<uint8_t> read_data;
+    //std::vector<uint8_t> work;
 
     // populate the original tensors so we get an initial meta data
     for (int i = 0; i < ml->n_tensors; ++i) {
@@ -4810,7 +4810,18 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     // placeholder for the meta data
     ::zeros(fout, meta_size);
 
-    std::vector<float> f32_conv_buf;
+    //std::vector<float> f32_conv_buf;
+    std::vector<std::vector<uint8_t>> read_data_buffers(2);
+    std::vector<std::vector<float>> f32_conv_buffers(2);
+    std::vector<std::vector<uint8_t>> work_buffers(2);
+    int i_out_buffer = 0;
+    int i_in_buffer = 0;
+
+    auto write_data = [&fout] (size_t new_size, void * new_data) {
+        fout.write((const char *) new_data, new_size);
+        zeros(fout, GGML_PAD(new_size, align) - new_size);
+    };
+    std::thread writer_thread;
 
     float time_convert = 0, time_quantize = 0, time_write = 0, time_read = 0;
 
@@ -4820,6 +4831,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         const std::string name = ggml_get_name(tensor);
 
         auto tim1 = std::chrono::high_resolution_clock::now();
+        auto& read_data = read_data_buffers[i_in_buffer];
+        i_in_buffer = (i_in_buffer + 1)%2;
         read_data.resize(ggml_nbytes(tensor));
         tensor->data = read_data.data();
         ml->load_data_for(tensor);
@@ -4957,6 +4970,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             float * f32_data;
 
+            auto & work = work_buffers[i_out_buffer];
+            auto & f32_conv_buf = f32_conv_buffers[i_out_buffer];
+            i_out_buffer = (i_out_buffer + 1)%2;
+
+            work.resize(nelements * 4); // upper bound on size
+            new_data = work.data();
+
             auto tim1 = std::chrono::high_resolution_clock::now();
             if (tensor->type == GGML_TYPE_F32) {
                 f32_data = (float *) tensor->data;
@@ -4971,9 +4991,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             LLAMA_LOG_INFO("quantizing to %s .. ", ggml_type_name(new_type));
             fflush(stdout);
-
-            work.resize(nelements * 4); // upper bound on size
-            new_data = work.data();
             std::vector<int64_t> hist_cur;
             if (collect_histo) {
                 hist_cur.resize(1 << 4, 0);
@@ -5050,10 +5067,18 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         // write tensor data + padding
         tim1 = std::chrono::high_resolution_clock::now();
-        fout.write((const char *) new_data, new_size);
-        zeros(fout, GGML_PAD(new_size, align) - new_size);
+        if (writer_thread.joinable()) {
+            writer_thread.join();
+        }
+        writer_thread = std::thread(write_data, new_size, new_data);
+        //fout.write((const char *) new_data, new_size);
+        //zeros(fout, GGML_PAD(new_size, align) - new_size);
         tim2 = std::chrono::high_resolution_clock::now();
         time_write += 1e-6f*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count();
+    }
+
+    if (writer_thread.joinable()) {
+        writer_thread.join();
     }
 
     // go back to beginning of file and write the updated meta data
